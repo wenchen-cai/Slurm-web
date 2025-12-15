@@ -593,4 +593,3 @@ metrics:
     type: str
     default: slurm
     doc: Name of Prometheus job which scrapes Slurm-web metrics.
-# end
