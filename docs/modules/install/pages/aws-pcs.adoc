@@ -1,0 +1,328 @@
+= AWS Parallel Computing Service (PCS) Integration
+:toc: left
+
+== Overview
+
+This guide explains how to configure Slurm-web to work with AWS Parallel Computing Service (PCS) clusters using JWT authentication with AWS Secrets Manager.
+
+AWS PCS requires JWT tokens with specific POSIX user identity claims. Slurm-web's PCS mode automatically generates these tokens using a signing key retrieved from AWS Secrets Manager.
+
+== Architecture
+
+When using PCS mode, the authentication flow is:
+
+----
+Browser
+  ↓ (UI JWT / session)
+Gateway
+  ↓ (same JWT)
+Agent
+  ↓ (PCS JWT with POSIX claims)
+slurmrestd (on PCS cluster)
+----
+
+**Important:** The UI JWT and PCS JWT are completely separate:
+
+* **UI JWT**: Used for browser → gateway → agent authentication
+* **PCS JWT**: Used only for agent → slurmrestd authentication, contains POSIX claims
+
+This separation ensures security and follows the principle of least privilege.
+
+== Prerequisites
+
+Before setting up Slurm-web with AWS PCS:
+
+. *AWS PCS Cluster*: You need an AWS PCS cluster with:
+   * Slurm 25.05 or later
+   * REST API enabled (slurmrestd)
+   * Network access to the cluster's private IP
+
+. *AWS Credentials*: The agent must have AWS credentials to access Secrets Manager:
+   * IAM role (recommended for EC2 instances)
+   * AWS CLI credentials
+   * Environment variables
+
+. *AWS Permissions*: The agent needs permission to read the JWT signing key:
++
+[source,json]
+----
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Effect": "Allow",
+      "Action": [
+        "secretsmanager:GetSecretValue"
+      ],
+      "Resource": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:pcs-*"
+    }
+  ]
+}
+----
+
+. *Python Dependencies*: Install boto3 for AWS SDK access:
++
+[source,bash]
+----
+pip install boto3
+----
+
+== Getting the JWT Signing Key Information
+
+. Open the https://console.aws.amazon.com/pcs/[AWS PCS console]
+
+. Select your cluster from the list
+
+. In the cluster configuration details, locate the *Scheduler Authentication* section
+
+. Note the *JSON Web Token (JWT) key ARN* and *version*
++
+Example: `arn:aws:secretsmanager:us-east-1:123456789012:secret:pcs-my-cluster-jwt-key-abc123`
+
+. Also note the *Slurm REST API endpoint* private IP address and port
++
+Example: `http://10.0.1.100:6820`
+
+== Configuration
+
+=== Basic PCS Configuration
+
+Create or modify `/etc/slurm-web/agent.ini`:
+
+[source,ini]
+----
+[service]
+cluster = my-pcs-cluster
+interface = 0.0.0.0
+port = 5012
+
+[slurmrestd]
+# URI to slurmrestd on your PCS cluster
+uri = http://10.0.1.100:6820
+
+# Use JWT authentication
+auth = jwt
+
+# Enable PCS mode
+jwt_mode = pcs
+
+# Username for JWT sun claim
+jwt_user = slurm-web
+
+# Token lifespan (300 seconds = 5 minutes recommended)
+jwt_lifespan = 300
+
+# AWS Secrets Manager secret ARN (required)
+pcs_secret_id = arn:aws:secretsmanager:us-east-1:123456789012:secret:pcs-my-cluster-jwt-key-abc123
+
+# AWS region (required)
+pcs_region = us-east-1
+----
+
+=== POSIX User Configuration
+
+By default, tokens are generated with UID/GID 0 (root), which has full access to all Slurm operations. You can customize the POSIX identity:
+
+[source,ini]
+----
+[slurmrestd]
+# ... other settings ...
+
+# Use a specific user ID
+pcs_uid = 1000
+
+# Use a specific group ID
+pcs_gid = 1000
+
+# Include additional group memberships
+pcs_gids =
+  1000
+  100
+  200
+
+# Set user metadata
+pcs_gecos = Slurm Web Service Account
+pcs_home_dir = /home/slurmweb
+pcs_shell = /bin/bash
+----
+
+=== Complete Example
+
+See the example configuration file at `docs/examples/agent-pcs.ini` for a complete configuration with all options.
+
+== AWS Credentials Setup
+
+The agent needs AWS credentials to access Secrets Manager. There are several ways to provide credentials:
+
+=== IAM Role (Recommended for EC2)
+
+If running on an EC2 instance, attach an IAM role with the necessary permissions:
+
+. Create an IAM role with the Secrets Manager read policy (see Prerequisites)
+. Attach the role to your EC2 instance
+. No additional configuration needed - boto3 will automatically use the instance profile
+
+=== AWS CLI Credentials
+
+Configure AWS CLI credentials on the agent host:
+
+[source,bash]
+----
+aws configure
+----
+
+=== Environment Variables
+
+Set AWS credentials as environment variables:
+
+[source,bash]
+----
+export AWS_ACCESS_KEY_ID=your_access_key
+export AWS_SECRET_ACCESS_KEY=your_secret_key
+export AWS_DEFAULT_REGION=us-east-1
+----
+
+== Verification
+
+=== Test Agent Startup
+
+Start the agent and check the logs:
+
+[source,bash]
+----
+slurm-web-agent
+----
+
+Look for log messages indicating successful PCS initialization:
+
+----
+INFO - PCS JWT provider initialized for secret arn:aws:... in region us-east-1
+INFO - Successfully retrieved signing key from Secrets Manager (version: ...)
+INFO - AWS PCS JWT authentication mode initialized
+----
+
+=== Test API Access
+
+Test that the agent can authenticate with slurmrestd:
+
+[source,bash]
+----
+curl http://localhost:5012/v1.0.0/ping
+----
+
+You should receive a successful response from slurmrestd.
+
+=== Check JWT Token Generation
+
+Enable debug logging to see JWT token generation:
+
+[source,ini]
+----
+[service]
+debug = true
+debug_flags =
+  - slurmweb
+  - ALL
+----
+
+Restart the agent and look for debug messages:
+
+----
+DEBUG - Generated PCS JWT token for user slurm-web (uid=0, gid=0, expires in 300s)
+DEBUG - Generating fresh PCS JWT for authentication to slurmrestd
+----
+
+== Troubleshooting
+
+=== "Unable to initialize PCS JWT provider: boto3 is required"
+
+*Solution*: Install boto3:
+
+[source,bash]
+----
+pip install boto3
+----
+
+=== "Failed to retrieve signing key from Secrets Manager: AccessDenied"
+
+*Solution*: Check that:
+
+. Your AWS credentials are configured correctly
+. The IAM role/user has permission to read the secret
+. The secret ARN is correct
+
+=== "Missing pcs_secret_id in configuration"
+
+*Solution*: Add the `pcs_secret_id` parameter to the `[slurmrestd]` section of your configuration file.
+
+=== "Missing pcs_region in configuration"
+
+*Solution*: Add the `pcs_region` parameter to the `[slurmrestd]` section of your configuration file.
+
+=== Token expiration issues
+
+If you see authentication failures, check that:
+
+. Token lifespan (`jwt_lifespan`) is appropriate (300 seconds recommended)
+. There are no network connectivity issues between agent and slurmrestd
+. The Secrets Manager key hasn't been rotated (if so, restart the agent)
+
+== Key Rotation
+
+If AWS rotates the JWT signing key in Secrets Manager:
+
+. The agent will automatically fetch the new key on the next token generation
+. No manual intervention is typically required
+. If issues occur, restart the agent to force a key refresh
+
+== Security Considerations
+
+=== Token Lifetime
+
+* Short-lived tokens (5 minutes) are recommended for security
+* Tokens are generated fresh for each request to slurmrestd
+* Tokens are not persisted to disk
+
+=== Separation of Concerns
+
+* UI JWT (for browser authentication) is completely separate from PCS JWT
+* PCS JWT is only used for agent → slurmrestd communication
+* PCS JWT never leaves the agent and is not exposed to browsers
+
+=== IAM Permissions
+
+* Follow the principle of least privilege
+* Only grant `secretsmanager:GetSecretValue` on the specific PCS secret
+* Use IAM roles instead of access keys when possible
+
+=== Network Security
+
+* Ensure slurmrestd is not publicly accessible
+* Use VPC security groups to restrict access to slurmrestd
+* Consider using VPN or AWS PrivateLink for external access
+
+== Performance Considerations
+
+* Tokens are generated on-demand and cached only for the duration of a request
+* AWS Secrets Manager calls are made only when fetching the signing key (once at startup, or when rotated)
+* Subsequent token generation uses the cached signing key
+* No performance impact compared to standard JWT mode after initial key fetch
+
+== Migration from Standard JWT Mode
+
+If you're migrating from standard Slurm JWT mode to PCS mode:
+
+. Update your configuration to use `jwt_mode = pcs`
+. Add PCS-specific parameters (`pcs_secret_id`, `pcs_region`)
+. Ensure boto3 is installed
+. Configure AWS credentials
+. Remove or comment out the `jwt_key` parameter (not used in PCS mode)
+. Restart the agent
+
+The UI JWT configuration remains unchanged.
+
+== Additional Resources
+
+* https://docs.aws.amazon.com/pcs/latest/userguide/authenticating-with-slurm-rest-api.html[AWS PCS Slurm REST API Authentication Guide]
+* https://boto3.amazonaws.com/v1/documentation/api/latest/guide/credentials.html[Boto3 Credentials Configuration]
+* https://docs.aws.amazon.com/secretsmanager/latest/userguide/intro.html[AWS Secrets Manager Documentation]

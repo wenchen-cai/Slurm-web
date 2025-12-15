@@ -88,8 +88,9 @@ slurmrestd:
     choices:
     - auto
     - static
+    - pcs
     doc: |
-      Slurmrestd JWT authentication mode, either _auto_ or _static_.
+      Slurmrestd JWT authentication mode, either _auto_, _static_, or _pcs_.
 
       In _auto_ mode, Slurm-web agent generates tokens with the signature key
       specified in `jwt_key`. The tokens have a limited lifespan as defined with
@@ -98,6 +99,11 @@ slurmrestd:
 
       In _static_ mode, Slurm-web simply use the token provided with
       `jwt_token`.
+
+      In _pcs_ mode, Slurm-web agent generates tokens for AWS Parallel Computing
+      Service (PCS) using a signing key retrieved from AWS Secrets Manager. This
+      mode is specifically designed for AWS PCS environments and requires boto3.
+      Tokens include POSIX user identity claims required by PCS.
 
       This parameter is used only when `auth` is _jwt_.
   jwt_user:
@@ -136,6 +142,70 @@ slurmrestd:
 
       This parameter is used only when `auth` is _jwt_ and `jwt_mode` is
       _static_.
+  pcs_secret_id:
+    type: str
+    doc: |
+      AWS Secrets Manager secret ID or ARN containing the JWT signing key for
+      PCS authentication. This is the secret created by AWS PCS for your cluster.
+
+      Example: arn:aws:secretsmanager:us-east-1:123456789012:secret:pcs-cluster-key
+
+      This parameter is required when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+    ex: arn:aws:secretsmanager:us-east-1:123456789012:secret:pcs-cluster-key-abc123
+  pcs_region:
+    type: str
+    doc: |
+      AWS region where the Secrets Manager secret is stored.
+
+      This parameter is required when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+    ex: us-east-1
+  pcs_uid:
+    type: int
+    default: 0
+    doc: |
+      POSIX user ID to use in PCS JWT tokens. The default is 0 (root) which
+      typically has full access to Slurm operations.
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+  pcs_gid:
+    type: int
+    default: 0
+    doc: |
+      POSIX group ID to use in PCS JWT tokens. The default is 0 (root).
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+  pcs_gids:
+    type: list
+    content: int
+    doc: |
+      Additional POSIX group IDs to include in PCS JWT tokens. If not specified,
+      defaults to [pcs_gid].
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+    ex:
+    - 0
+    - 100
+  pcs_gecos:
+    type: str
+    default: Slurm Web Agent
+    doc: |
+      GECOS field (user comment) to use in PCS JWT tokens.
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+  pcs_home_dir:
+    type: str
+    default: /
+    doc: |
+      Home directory to use in PCS JWT tokens.
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
+  pcs_shell:
+    type: str
+    default: /sbin/nologin
+    doc: |
+      Shell to use in PCS JWT tokens.
+
+      This parameter is used only when `auth` is _jwt_ and `jwt_mode` is _pcs_.
   version:
     type: str
     deprecated:
