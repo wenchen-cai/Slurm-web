@@ -81,8 +81,10 @@ RUN set -eux; \
 
 # Copy config files and create compatibility wrappers BEFORE cleanup
 RUN set -eux; \
-    mkdir -p /usr/share/slurm-web/conf && \
-    cp -r /tmp/slurm-web-src/conf/vendor /usr/share/slurm-web/conf/ && \
+    mkdir -p /usr/share/slurm-web/conf/vendor && \
+    cp -r /tmp/slurm-web-src/conf/vendor/* /usr/share/slurm-web/conf/vendor/ && \
+    cp /tmp/slurm-web-src/conf/vendor/agent.yml /usr/share/slurm-web/conf/agent.yml && \
+    cp /tmp/slurm-web-src/conf/vendor/gateway.yml /usr/share/slurm-web/conf/gateway.yml 2>/dev/null || true && \
     rm -f /usr/bin/slurm-web-agent /usr/bin/slurm-web-gateway || true && \
     cp /tmp/slurm-web-src/lib/exec/slurm-web-compat /usr/bin/slurm-web-compat && \
     chmod +x /usr/bin/slurm-web-compat && \
